@@ -1,0 +1,56 @@
+{
+    "name": "phloxcz/api-core",
+    "description": "Shared core of the Phlox API libraries for Nette: API controllers, attributes, parameter binding, authorization and CORS.",
+    "keywords": ["nette", "api", "controller", "attributes"],
+    "type": "library",
+    "license": "MIT",
+    "homepage": "https://github.com/phloxcz/api-core",
+    "authors": [
+        {
+            "name": "Phlox",
+            "homepage": "https://github.com/phloxcz"
+        }
+    ],
+    "require": {
+        "php": ">=8.4",
+        "nette/di": "^3.1",
+        "nette/http": "^3.2",
+        "nette/schema": "^1.3",
+        "nette/security": "^3.1",
+        "nette/utils": "^4.0"
+    },
+    "require-dev": {
+        "nette/application": "^3.2",
+        "nette/tester": "^2.5",
+        "phpstan/phpstan": "^2.0",
+        "symfony/yaml": "^7.0",
+        "tracy/tracy": "^2.10"
+    },
+    "suggest": {
+        "nette/application": "Lets the API start after the bootstrap has finished, and makes LinkGenerator available in API controllers",
+        "tracy/tracy": "Unexpected exceptions get logged through Tracy's logger instead of error_log()"
+    },
+    "autoload": {
+        "psr-4": {
+            "Phlox\\ApiCore\\": "src/"
+        }
+    },
+    "scripts": {
+        "test": "tester tests -C",
+        "phpstan": "phpstan analyse",
+        "check": [
+            "@phpstan",
+            "@test"
+        ]
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "config": {
+        "sort-packages": true
+    },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "0.1-dev"
+        }
+    }
+}
