@@ -28,4 +28,12 @@ class Dto
     {
         return false;
     }
+
+    /**
+     * Whether it can be built from a request, rather than only describing what goes out.
+     */
+    public function isInput(): bool
+    {
+        return true;
+    }
 }

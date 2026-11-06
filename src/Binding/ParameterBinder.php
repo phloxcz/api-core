@@ -13,6 +13,8 @@ declare(strict_types=1);
 namespace Phlox\ApiCore\Binding;
 
 use Phlox\ApiCore\ApiException;
+use Phlox\ApiCore\Attributes\PatchOf;
+use Phlox\ApiCore\Patch;
 use Phlox\ApiCore\Types\DtoMeta;
 use Phlox\ApiCore\Types\Type;
 use Phlox\ApiCore\Types\TypeReader;
@@ -90,7 +92,10 @@ final class ParameterBinder
             }
 
             try {
-                $converted = $this->converter->convert(self::getType($parameter), $value, $isPrebound ? '' : $name);
+                $patchOf = self::getPatchOf($parameter);
+                $converted = $patchOf !== null
+                    ? ($value === null && $parameter->allowsNull() ? null : $this->converter->toPatch($patchOf, $value, $isPrebound ? '' : $name))
+                    : $this->converter->convert(self::getType($parameter), $value, $isPrebound ? '' : $name);
                 if (self::isBound($parameter)) {
                     $converted = self::bindToParameter($parameter, $converted);
                 }
@@ -112,6 +117,25 @@ final class ParameterBinder
         }
 
         return $arguments;
+    }
+
+    /**
+     * @return class-string|null The DTO a Patch parameter follows; null for any other parameter
+     */
+    private static function getPatchOf(ReflectionParameter $parameter): ?string
+    {
+        $type = $parameter->getType();
+        if (!$type instanceof \ReflectionNamedType || $type->getName() !== Patch::class) {
+            return null;
+        }
+
+        $attribute = $parameter->getAttributes(PatchOf::class)[0] ?? null;
+        if ($attribute === null) {
+            $method = $parameter->getDeclaringFunction()->getName();
+            throw new \LogicException("Parameter \${$parameter->getName()} of {$method}() is a Patch, so it needs #[PatchOf] to say which DTO it follows.");
+        }
+
+        return $attribute->newInstance()->class;
     }
 
     private static function isBound(ReflectionParameter $parameter): bool

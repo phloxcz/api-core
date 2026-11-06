@@ -13,6 +13,8 @@ declare(strict_types=1);
 namespace Phlox\ApiCore\Binding;
 
 use Phlox\ApiCore\ApiConstructible;
+use Phlox\ApiCore\Patch;
+use Phlox\ApiCore\Types\DtoField;
 use Phlox\ApiCore\Types\DtoMeta;
 use Phlox\ApiCore\Types\Type;
 
@@ -335,6 +337,8 @@ final class ValueConverter
      */
     private function toDto(string $class, mixed $value, string $path): object
     {
+        self::requireInput($class);
+
         if (is_object($value)) {
             $value = get_object_vars($value);
         }
@@ -358,21 +362,9 @@ final class ValueConverter
                 continue;
             }
 
-            try {
-                $converted = $this->convert($field->type, $value[$name], $fieldPath);
-            } catch (ConversionException $e) {
-                $errors += $e->errors;
+            $converted = null;
+            if (!$this->convertField($field, $value[$name], $fieldPath, $converted, $errors)) {
                 continue;
-            }
-
-            if ($converted !== null) {
-                foreach ($field->constraints as $constraint) {
-                    $error = $constraint->validate($converted);
-                    if ($error !== null) {
-                        $errors[$fieldPath] = $error;
-                        continue 2;
-                    }
-                }
             }
 
             if ($field->inConstructor) {
@@ -397,6 +389,86 @@ final class ValueConverter
         }
 
         return $dto;
+    }
+
+    /**
+     * Only the fields that were sent, by the rules of the DTO, which itself isn't created:
+     * it couldn't be without its required fields.
+     *
+     * @param class-string $class
+     * @throws ConversionException
+     */
+    public function toPatch(string $class, mixed $value, string $path): Patch
+    {
+        if (!DtoMeta::isDto($class)) {
+            throw new \LogicException("#[PatchOf] needs a class with #[Dto], which {$class} isn't.");
+        }
+
+        self::requireInput($class);
+
+        if (is_object($value)) {
+            $value = get_object_vars($value);
+        }
+        if (!is_array($value) || ($value !== [] && array_is_list($value))) {
+            throw ConversionException::at($path, 'must be an object.');
+        }
+
+        $values = [];
+        $errors = [];
+
+        foreach (DtoMeta::getFields($class) as $name => $field) {
+            if (!array_key_exists($name, $value)) {
+                continue;
+            }
+
+            $converted = null;
+            if ($this->convertField($field, $value[$name], self::join($path, $name), $converted, $errors)) {
+                $values[$name] = $converted;
+            }
+        }
+
+        if ($errors !== []) {
+            throw new ConversionException($errors);
+        }
+
+        return new Patch($values);
+    }
+
+    /**
+     * What only describes output would quietly leave out what a client sent.
+     *
+     * @param class-string $class
+     */
+    private static function requireInput(string $class): void
+    {
+        if (!DtoMeta::isInput($class)) {
+            throw new \LogicException("{$class} describes what goes out, so it can't take a request. Use a class with #[Dto] for that.");
+        }
+    }
+
+    /**
+     * @param array<string, string> $errors (output)
+     */
+    private function convertField(DtoField $field, mixed $value, string $path, mixed &$converted, array &$errors): bool
+    {
+        try {
+            $converted = $this->convert($field->type, $value, $path);
+        } catch (ConversionException $e) {
+            $errors += $e->errors;
+            return false;
+        }
+
+        if ($converted !== null) {
+            foreach ($field->constraints as $constraint) {
+                $error = $constraint->validate($converted);
+                if ($error !== null) {
+                    $errors[$path] = $error;
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     private function typeError(Type $type, mixed $value, string $path): ConversionException

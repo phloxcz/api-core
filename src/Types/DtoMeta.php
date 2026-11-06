@@ -48,6 +48,21 @@ final class DtoMeta
     }
 
     /**
+     * @param class-string $class A DTO
+     */
+    public static function isInput(string $class): bool
+    {
+        for ($current = new \ReflectionClass($class); $current !== false; $current = $current->getParentClass()) {
+            $attribute = $current->getAttributes(Dto::class, \ReflectionAttribute::IS_INSTANCEOF)[0] ?? null;
+            if ($attribute !== null) {
+                return $attribute->newInstance()->isInput();
+            }
+        }
+
+        return false;
+    }
+
+    /**
      * @param class-string $class
      * @return array<string, DtoField>
      */

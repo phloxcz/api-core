@@ -142,6 +142,59 @@ Fields the class doesn't declare are ignored, so a client can't set anything els
 
 In a response, public properties are sent, and dates inside a DTO become ISO 8601 strings. Anything that isn't a DTO is sent as before, including a date in a plain array.
 
+### Collections
+
+PHP can only say `array`, so the type of the items comes from a docblock:
+
+```php
+#[Dto]
+final readonly class ImportTasks
+{
+    /**
+     * @param list<CreateTask> $tasks
+     * @param list<string> $labels
+     * @param array<string, int> $limits An object with numbers
+     */
+    public function __construct(
+        #[Count(min: 1, max: 20)] public array $tasks,
+        public array $labels = [],
+        public array $limits = [],
+    ) {
+    }
+}
+```
+
+`$import->tasks` then holds instances of `CreateTask`, each checked by its own rules. A problem has a path with the position of the row, such as `tasks.1.title`, and nothing reaches the method until all of it is right. `#[Count]` limits the number of items, and it's a good idea to have it, so that a client can't send a million of them.
+
+Without a DTO in its type, a docblock isn't enforced: `list<string>` on a parameter of a method stays documentation. In a DTO, it's enforced.
+
+### Changing only what was sent
+
+A DTO has to be whole, so it can't tell a field left out from a field sent as `null`. A `Patch` can. It takes its fields and rules from a DTO named by `#[PatchOf]`, so one DTO is enough for both creating and changing:
+
+```php
+public function change(int $id, #[FromBody, PatchOf(SaveType::class)] Patch $changes): array
+{
+    $type = $this->findType($id);
+    $changes->applyTo($type);       // sets what was sent on properties of the same name
+    $type->saveModified();
+    // ...
+}
+```
+
+| Method | Gives |
+|---|---|
+| `has('name')` | whether it was sent, also as `null` |
+| `get('name', $default)` | its converted value |
+| `toArray()` | what was sent, by the names of the DTO |
+| `applyTo($object)` | sets what was sent on the object, and returns it |
+
+No field is required, but a value that is sent has to meet the rules: types, constraints, and `null` only where the DTO allows it. Fields the DTO doesn't declare are ignored. A nested DTO is whole, so a change to a list replaces the list.
+
+The DTO itself isn't created, so what its constructor checks by throwing `\InvalidArgumentException` doesn't run, and neither does a rule across several fields. The documentation has it as the schema of the DTO without `required`, named like `SaveType_Patch`.
+
+A class with `#[Resource]` from `phloxcz/api-query` says what goes out and can't take a request, not even through `Patch`. Doing so is an exception for you, because it would quietly leave out what a client sent.
+
 ### Constraints
 
 These work on DTO fields and on method parameters alike, and appear in the documentation too. `null` isn't checked; whether it's allowed depends on the type.
