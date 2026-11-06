@@ -142,6 +142,29 @@ To get the list, look at what clients have in `select`. **A name in `select`, `f
 
 Sorting by something that isn't a field, such as an expression, stays with the application: take it out of the query and order the selection yourself, as before.
 
+To show less of an entity than it has, such as to hide a column the application itself reads, use a resource. Most entities need one line, and `resource:` in the configuration makes it hold everywhere, so controllers need no change here either:
+
+```php
+#[Resource(Entity\Type::class, fields: '*')]
+final class TypeResource {}
+
+#[Resource(Entity\File::class, fields: ['id', 'name', 'fileName', 'fileSize'])]
+final class FileResource
+{
+    /** @param list<VersionResource> $versions */
+    public function __construct(public array $versions = []) {}
+}
+```
+
+```neon
+apiQuery:
+    entities:
+        App\Entity\File:
+            resource: App\ApiV1Module\Resources\FileResource
+```
+
+A condition in `entities.neon` is SQL which Nette quotes on its way: write keywords in capitals, as in `deleted = FALSE`, because a lowercase `false` is taken for a column.
+
 ## 6. Queries
 
 The format of queries stays, including `criteria`, `take`, `skip` and the operators of Kendo UI. The shape of responses stays the one of `pagination: true`: `{data, total, page, pageSize, from, to}` at every level, and a list with `skipLimitOffset`.
