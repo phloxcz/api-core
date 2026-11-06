@@ -1,13 +1,15 @@
 # phloxcz/api-core
 
+**English** | [Česky](README.cs.md)
+
 **Shared core of the Phlox API libraries for [Nette](https://nette.org).**
 
 You normally don't install this package directly. It comes with a transport library:
 
-- [`phloxcz/rpc-api`](../phlox-rpc-api) – JSON-RPC 2.0
-- [`phloxcz/rest-api`](../phlox-rest-api) – REST
+- [`phloxcz/rpc-api`](https://github.com/phloxcz/rpc-api) – JSON-RPC 2.0
+- [`phloxcz/rest-api`](https://github.com/phloxcz/rest-api) – REST
 
-[`phloxcz/api-query`](../phlox-api-query) adds a query language to either of them. [`phlox-api-sample`](../phlox-api-sample) shows them together, and [`MIGRATION.md`](MIGRATION.md) leads from `abrad450/api-server-nette`.
+[`phloxcz/api-query`](https://github.com/phloxcz/api-query) adds a query language to either of them. [`phlox-api-sample`](https://github.com/phloxcz/api-sample) shows them together, and [`MIGRATION.md`](MIGRATION.md) leads from `abrad450/api-server-nette`.
 
 > ⚠️ This package is under active development. The API is not yet stable.
 

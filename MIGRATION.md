@@ -1,6 +1,8 @@
 # Migrating from abrad450/api-server-nette
 
-This guide takes a project from `abrad450/api-server-nette` and `abrad450/mapped-database-nette` to the Phlox libraries. It's written for whoever does the migration. Details of each library are in its README, and [`phlox-api-sample`](../phlox-api-sample) shows the result.
+**English** | [Česky](MIGRATION.cs.md)
+
+This guide takes a project from `abrad450/api-server-nette` and `abrad450/mapped-database-nette` to the Phlox libraries. It's written for whoever does the migration. Details of each library are in its README, and [`phlox-api-sample`](https://github.com/phloxcz/api-sample) shows the result.
 
 Controllers mostly stay as they are. Most of the work is in the configuration, in moving entities, and in checking the behaviour that got stricter.
 
@@ -192,4 +194,4 @@ Delete a controller which only served a generated file.
 
 ## 8. Firebird
 
-Add `options: {driverClass: Phlox\FirebirdDatabase\FirebirdDriver}` to the connection. Read its [README](../phlox-firebird-database/README.md), especially about integers written to `NUMERIC` columns, which may have left wrong values in your data.
+Add `options: {driverClass: Phlox\FirebirdDatabase\FirebirdDriver}` to the connection. Read its [README](https://github.com/phloxcz/firebird-database/blob/master/README.md), especially about integers written to `NUMERIC` columns, which may have left wrong values in your data.
