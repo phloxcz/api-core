@@ -18,7 +18,7 @@ use ReflectionType;
 use ReflectionUnionType;
 
 /**
- * Gets the Type of a reflected parameter, property or return value.
+ * Gets the Type of a reflected parameter or property, and the native type of anything.
  *
  * A docblock only refines a native type too vague to say anything (`array`,
  * `mixed`, none at all). Where a native type is precise, it wins over a docblock
@@ -105,16 +105,6 @@ final class TypeReader
 
         return self::isVague($native)
             ? self::refine($native, (new DocComment($property->getDocComment()))->getVar()['type'] ?? null, $scope)
-            : $native;
-    }
-
-    public static function ofReturn(\ReflectionMethod $method): Type
-    {
-        $scope = $method->getDeclaringClass();
-        $native = self::native($method->getReturnType(), $scope);
-
-        return self::isVague($native)
-            ? self::refine($native, (new DocComment($method->getDocComment()))->getReturn()['type'] ?? null, $scope)
             : $native;
     }
 

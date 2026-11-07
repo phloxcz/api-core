@@ -79,7 +79,7 @@ final class ControllerInvoker
             );
         } catch (InvalidParamsException $e) {
             throw new ApiException(
-                ApiException::E_INVALID_PARAMS,
+                ProtocolError::InvalidParams,
                 $e->getMessage(),
                 previous: $e,
                 data: ['fields' => $e->fields],

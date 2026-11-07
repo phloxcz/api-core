@@ -1,30 +1,48 @@
 <?php
 
 /**
- * JSON Schema generated from types, the older notation and the YAML output.
+ * JSON Schema generated from types and from descriptions of #[Response], and the YAML output.
  */
 
 declare(strict_types=1);
 
 use Phlox\ApiCore\ApiConstructible;
+use Phlox\ApiCore\ApiError;
+use Phlox\ApiCore\ApiException;
 use Phlox\ApiCore\Attributes\Constraints\Format;
+use Phlox\ApiCore\Attributes\ErrorCase;
+use Phlox\ApiCore\ProtocolError;
 use Phlox\ApiCore\Attributes\Constraints\Length;
 use Phlox\ApiCore\Attributes\Constraints\Range;
 use Phlox\ApiCore\Attributes\Dto;
-use Phlox\ApiCore\Attributes\Parameter;
 use Phlox\ApiCore\Attributes\Schema;
 use Phlox\ApiCore\Attributes\Throws;
-use Phlox\ApiCore\Documentation\ContentDefinition;
 use Phlox\ApiCore\Documentation\Documents;
 use Phlox\ApiCore\Documentation\DocumentationConfig;
 use Phlox\ApiCore\Documentation\MethodReader;
 use Phlox\ApiCore\Documentation\SchemaBuilder;
 use Phlox\ApiCore\Documentation\Yaml;
+use Phlox\ApiCore\Schema\AnyOf;
+use Phlox\ApiCore\Schema\Binary;
+use Phlox\ApiCore\Schema\JsonSchema;
+use Phlox\ApiCore\Schema\ListOf;
+use Phlox\ApiCore\Schema\MapOf;
+use Phlox\ApiCore\Schema\Paged;
+use Phlox\ApiCore\Schema\SchemaDefinition;
+use Phlox\ApiCore\Schema\Shape;
 use Phlox\ApiCore\Types\Type;
 use Phlox\ApiCore\Types\TypeParser;
 use Tester\Assert;
 
 require __DIR__ . '/bootstrap.php';
+
+enum TaskError: int implements ApiError
+{
+    #[ErrorCase(423, 'The task is locked.')]
+    case Locked = 1003;
+
+    case Silent = 1004;
+}
 
 /** Who can do what. */
 enum Role: string
@@ -111,6 +129,14 @@ final class Service
 {
 }
 
+#[Attribute(Attribute::TARGET_METHOD | Attribute::IS_REPEATABLE)]
+final class Content
+{
+    public function __construct(public mixed $content)
+    {
+    }
+}
+
 #[Throws(500, 'Class-wide')]
 final class Controller
 {
@@ -123,14 +149,25 @@ final class Controller
      * @param list<Address> $addresses Where
      * @return list<User> The users
      */
-    #[Throws(1001, 'Closed', httpCode: 409)]
+    #[Throws(409, 'Closed', errorCode: 1001)]
     public function documented(#[Range(min: 1)] int $page, array $addresses = [], ?string $note = null, Role $role = Role::User, #[Schema(['example' => 'x'])] string $example = 'x', DateTimeImmutable $when = new DateTimeImmutable()): array
     {
         return [];
     }
 
-    #[Parameter('filter', ['object', ['a' => 'int']])]
-    public function overridden(array $filter): void
+    #[Phlox\ApiCore\Attributes\Parameter('filter', ['object', ['a' => 'int']])]
+    public function removed(array $filter): void
+    {
+    }
+
+    #[Content(['object', ['a' => 'int']])]
+    #[Content(['@pager', Address::class])]
+    public function older(): void
+    {
+    }
+
+    #[Content(new ListOf('int'))]
+    public function newer(): void
     {
     }
 
@@ -249,8 +286,8 @@ $reader = new MethodReader($class, new ReflectionMethod(Controller::class, 'docu
 
 Assert::same('Summary of it.', $reader->doc->summary);
 Assert::same('Longer text.', $reader->doc->description);
-Assert::same('The users', $reader->getReturnDescription());
-Assert::same('list<User>', (string) $reader->getReturnType());
+Assert::same('array', (string) $reader->getReturnType(), 'a response is described by an attribute, not by @return');
+Assert::same('Controller::documented()', $reader->getName());
 Assert::false($reader->deprecated);
 
 $parameters = $reader->getParameters();
@@ -264,34 +301,117 @@ Assert::same(['allOf' => [['$ref' => '#/components/schemas/Role']], 'default' =>
 Assert::same(['example' => 'x', 'default' => 'x', 'type' => 'string'], $parameters['example']['schema']);
 Assert::same(['type' => 'string', 'format' => 'date-time'], $parameters['when']['schema'], 'an object default has no JSON form');
 
-$throws = array_map(static fn(Throws $throw): array => [$throw->code, $throw->message, $throw->httpCode], $reader->getThrows());
-Assert::same([[1001, 'Closed', 409], [500, 'Class-wide', 500]], $throws);
+$throws = array_map(static fn(Throws $throw): array => [$throw->httpCode, $throw->message, $throw->errorCode], $reader->getThrows());
+Assert::same([[409, 'Closed', 1001], [500, 'Class-wide', null]], $throws);
 
-$overridden = new MethodReader($class, new ReflectionMethod(Controller::class, 'overridden'), $builder);
-Assert::same(['type' => 'object', 'properties' => ['a' => ['type' => 'integer']]], $overridden->getParameters()['filter']['schema']);
+// --- Errors: a status with a message, a code of your own, or an enum saying it all
+
+$e = new ApiException(404, 'The task was not found.');
+Assert::same([404, 404, null, 'The task was not found.'], [$e->getHttpCode(), $e->getCode(), $e->getErrorCode(), $e->getMessage()], 'the code clients get is the status');
+$e = new ApiException(409, 'Closed.', errorCode: 1001);
+Assert::same([409, 1001, 1001], [$e->getHttpCode(), $e->getCode(), $e->getErrorCode()]);
+Assert::same('Not found.', (new ApiException(404))->getMessage(), 'a message of the status');
+Assert::same('Error.', (new ApiException(418))->getMessage());
+
+$e = new ApiException(TaskError::Locked);
+Assert::same([423, 1003, 'The task is locked.'], [$e->getHttpCode(), $e->getCode(), $e->getMessage()]);
+Assert::same('Locked by Ann.', (new ApiException(TaskError::Locked, 'Locked by Ann.', data: ['by' => 'Ann']))->getMessage(), 'a message of its own');
+$e = new ApiException(ProtocolError::InvalidParams);
+Assert::same([422, -32602, 'Invalid method parameter(s).'], [$e->getHttpCode(), $e->getCode(), $e->getMessage()]);
+
+// What older versions passed first fails, saying how to write it
+Assert::exception(
+    static fn() => new ApiException(1001, 'Order is closed.'),
+    InvalidArgumentException::class,
+    "1001 is not the HTTP status of an error. The status comes first, and a code of your own goes to errorCode: new ApiException(409, 'Order is closed.', errorCode: 1001).",
+);
+Assert::exception(static fn() => new ApiException(200), InvalidArgumentException::class, '200 is not the HTTP status of an error.%a%');
+Assert::exception(static fn() => new ApiException(TaskError::Silent), LogicException::class, 'TaskError::Silent has no #[ErrorCase(httpCode, message)].');
+Assert::exception(static fn() => new Throws(1001, 'Closed'), InvalidArgumentException::class, '1001 is not the HTTP status of an error.%a%');
+
+$fromEnum = new Throws(TaskError::Locked);
+Assert::same([423, 'The task is locked.', 1003], [$fromEnum->httpCode, $fromEnum->message, $fromEnum->errorCode]);
+Assert::same('Not found.', (new Throws(404))->message);
+
+$removed = new MethodReader($class, new ReflectionMethod(Controller::class, 'removed'), $builder);
+Assert::exception(static fn() => $removed->getParameters(), InvalidArgumentException::class, '#[Parameter] is gone. %a%');
+
+$older = new MethodReader($class, new ReflectionMethod(Controller::class, 'older'), $builder);
+Assert::exception(static fn() => $older->getAttributes(Content::class), InvalidArgumentException::class, "The array notation is gone, use new Shape(['id' => 'int', 'note?' => '?string']).");
+$newer = new MethodReader($class, new ReflectionMethod(Controller::class, 'newer'), $builder);
+Assert::equal([new Content(new ListOf('int'))], $newer->getAttributes(Content::class));
 
 Assert::true((new MethodReader($class, new ReflectionMethod(Controller::class, 'deprecatedByDoc'), $builder))->deprecated);
 Assert::true((new MethodReader($class, new ReflectionMethod(Controller::class, 'deprecatedByAttribute'), $builder))->deprecated);
 
-// --- Content of #[Response] and #[Parameter]
+// --- Descriptions in #[Response]
 
-$content = static fn(string|array $definition): array|stdClass => ContentDefinition::toSchema($definition, new SchemaBuilder(), $class);
+$content = static fn(SchemaDefinition|string $definition): array|stdClass => (new SchemaBuilder())->buildDefinition($definition);
 
-Assert::same(['type' => 'array', 'items' => ['$ref' => '#/components/schemas/Address']], $content('list<Address>'));
-Assert::same(['type' => 'string', 'format' => 'binary'], $content('@binary'));
-Assert::same(['$ref' => '#/components/schemas/Error'], $content('@error'));
-Assert::same(['type' => 'string', 'minLength' => 1], $content(['type' => 'string', 'minLength' => 1]), 'JSON Schema goes through');
-Assert::equal(new stdClass(), $content('%%%'), 'what can not be read is anything');
-
-// The older notation
-Assert::same(['type' => 'array', 'items' => ['type' => 'string']], $content(['array', 'string']));
+Assert::same(['type' => 'integer'], $content('int'));
+Assert::same(['type' => ['string', 'null']], $content('?string'));
+Assert::equal(new stdClass(), $content('mixed'));
+Assert::same(['$ref' => '#/components/schemas/Address'], $content(Address::class));
+Assert::same(['anyOf' => [['$ref' => '#/components/schemas/Address'], ['type' => 'null']]], $content('?' . Address::class));
+Assert::same(['type' => 'array', 'items' => ['$ref' => '#/components/schemas/Address']], $content(new ListOf(Address::class)));
+Assert::same(['type' => 'object', 'additionalProperties' => ['type' => 'integer']], $content(new MapOf('int')));
+Assert::same(['type' => 'string', 'format' => 'binary'], $content(new Binary()));
 Assert::same(
-    ['type' => 'object', 'properties' => ['id' => ['type' => 'integer'], 'tags' => ['type' => 'array', 'items' => ['type' => 'string']]]],
-    $content(['object', ['id' => 'int', 'tags' => ['array', 'string']]]),
+    ['type' => 'array', 'items' => ['anyOf' => [['type' => 'integer'], ['type' => ['string', 'null']], ['$ref' => '#/components/schemas/Address']]]],
+    $content(new ListOf(new AnyOf('int', '?string', Address::class))),
 );
-$pager = $content(['@pager', 'Address']);
-Assert::same(['data', 'total', 'page', 'pageSize', 'from', 'to'], array_keys($pager['properties']));
-Assert::same(['$ref' => '#/components/schemas/Address'], $pager['properties']['data']['items']);
+Assert::exception(static fn() => new AnyOf('int'), InvalidArgumentException::class, 'new AnyOf() needs at least two options; for one, name it alone.');
+Assert::same(['type' => 'string', 'format' => 'binary'], $content(Nette\Http\FileUpload::class), 'an uploaded file');
+Assert::same(['type' => 'string', 'minLength' => 1], $content(new JsonSchema(['type' => 'string', 'minLength' => 1])), 'JSON Schema goes through');
+Assert::equal(new stdClass(), $content(new JsonSchema([])));
+
+Assert::same(
+    [
+        'type' => 'object',
+        'properties' => [
+            'id' => ['type' => 'integer'],
+            'tags' => ['type' => 'array', 'items' => ['type' => 'string']],
+            'note' => ['type' => ['string', 'null']],
+        ],
+        'required' => ['id', 'tags'],
+    ],
+    $content(new Shape(['id' => 'int', 'tags' => new ListOf('string'), 'note?' => '?string'])),
+    'a name with ? can be left out, a type with ? can be null',
+);
+Assert::equal(['type' => 'object', 'properties' => new stdClass()], $content(new Shape([])));
+Assert::exception(static fn() => $content(new Shape(['int'])), InvalidArgumentException::class, 'new Shape() needs names of its fields, got a list.');
+
+$page = $content(new Paged(Address::class));
+Assert::same(['data', 'total', 'page', 'pageSize', 'from', 'to'], array_keys($page['properties']));
+Assert::same($page['required'], array_keys($page['properties']));
+Assert::same(['$ref' => '#/components/schemas/Address'], $page['properties']['data']['items']);
+Assert::same(['integer', 'null'], $page['properties']['from']['type']);
+Assert::same($page, $content(new Shape(['value' => new Paged(Address::class)]))['properties']['value']);
+
+// A description of your own
+$own = new class implements SchemaDefinition {
+    public function toSchema(SchemaBuilder $builder): array
+    {
+        return (new Shape(['value' => 'int']))->toSchema($builder);
+    }
+};
+Assert::same(['type' => 'object', 'properties' => ['value' => ['type' => 'integer']], 'required' => ['value']], $content(new ListOf($own))['items']);
+
+// What isn't a type says what to write instead
+Assert::exception(static fn() => $content('Nowhere'), InvalidArgumentException::class, "Unknown type 'Nowhere'. Name a class by Foo::class, %a%");
+Assert::exception(static fn() => $content('list<Address>'), InvalidArgumentException::class, "Unknown type 'list<Address>'. Types as text are gone; %a%");
+Assert::exception(static fn() => $content('@binary'), InvalidArgumentException::class, "Unknown type '@binary'. Use new Binary.");
+Assert::exception(static fn() => $content('@error'), InvalidArgumentException::class, "Unknown type '@error'. Leave the content out%a%");
+Assert::exception(static fn() => $content('integer'), InvalidArgumentException::class, "Unknown type 'integer'.%a%");
+Assert::exception(static fn() => $content(''), InvalidArgumentException::class, "Unknown type ''.%a%");
+
+// --- A page as built, and as described
+
+Assert::same(['data' => ['a', 'b'], 'total' => 12, 'page' => 2, 'pageSize' => 10, 'from' => 10, 'to' => 11], Paged::result(['a', 'b'], 12, 10, 10));
+Assert::same(['data' => [], 'total' => 12, 'page' => 3, 'pageSize' => 10, 'from' => null, 'to' => null], Paged::result([], 12, 20, 10), 'past the end');
+Assert::same(['data' => [], 'total' => 0, 'page' => 1, 'pageSize' => 5, 'from' => null, 'to' => null], Paged::result([], 0, 0, 5));
+Assert::same(array_keys($page['properties']), array_keys(Paged::result([], 0, 0, 1)));
+Assert::exception(static fn() => Paged::result([], 0, 0, 0), InvalidArgumentException::class, 'A page needs a size from 1, got 0.');
 
 // --- Configuration
 

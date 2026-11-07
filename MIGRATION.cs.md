@@ -114,9 +114,11 @@ V každém kontroleru zkontrolujte:
 | `#[Authorize(['a', 'b'])]` | teď znamená a **nebo** b, dřív obě. Pro obě napište `#[Authorize(['a', 'b'], all: true)]` |
 | Metoda s `#[Route]` bez `#[HttpGet]` nebo jiného slovesa | nezkompiluje se. Bez obojího není endpoint a vrací 404 |
 | Veřejná metoda zděděná ze základního kontroleru | už není endpoint; přepište ji |
-| `new ApiException(400, 'x', null, 400)` | čtvrtý argument je teď `$previous`, použijte `httpCode: 400` |
-| Kód vyhozený bez `httpCode:` | vrací 500 jako dřív |
-| `#[Consumes('application/pdf')]` | vynucuje se: jiný typ dostane 415, dřív prošel. Ověřte, co klienti skutečně posílají |
+| `new ApiException(1001, 'x')` | HTTP stav je první: `new ApiException(409, 'x', errorCode: 1001)`, nebo jen `new ApiException(404, 'x')`, kde je kódem stav. Kód mimo `400`–`599` skončí chybou se správným zápisem ve zprávě. `internal:` pojmenujte, protože třetí argument je `errorCode` |
+| `#[Throws(1001, 'x', httpCode: 409)]` | `#[Throws(409, 'x', errorCode: 1001)]`, ve stejném pořadí jako `ApiException` |
+| `ApiException::E_INVALID_PARAMS` a ostatní konstanty | `ProtocolError::InvalidParams` a ostatní případy; kód je `->value` |
+| `Authorizer::E_UNAUTHORIZED`, `Authorizer::E_FORBIDDEN` | `401`, `403` |
+| `#[Consumes('application/pdf')]` | vynucuje se: jiný typ dostane 415, dřív prošel. Ověřte, co klienti skutečně posílají. Bez `#[FromBody]` zůstane tělo nenačtené, aby ho metoda mohla streamovat |
 | `$sortList->count()`, `new SortArrayList()` | řazení je teď obyčejné pole: `count()`, `[]`. `setSort()`, `$sort->field` a `$sort->dir` zůstávají |
 | `$query->getCriteriaByPath()` vracející null | zůstává; chybějící dotaz je prázdný `Query` jen přes parametr, takže `?Query` může být null v metodě, kterou voláte sami |
 
@@ -183,12 +185,27 @@ Další rozdíly:
 
 ## 7. Dokumentace
 
-`#[Response]` a `#[Parameter]` fungují dál, včetně `['object', [...]]`, `['@pager', Foo::class]`, `@binary` a `@error`. Oba atributy i zápis polem můžete postupně nahradit nativními typy, docblocky a DTO, které kromě dokumentace i kontrolují:
+Odpovědi se popisují objekty z `Phlox\ApiCore\Schema`, viz [Popis odpovědi](https://github.com/phloxcz/api-core/blob/master/README.cs.md#popis-odpovědi). Starší zápis při kompilaci kontejneru skončí chybou, která uvede metodu a čím zápis nahradit:
+
+| Staré | Nové |
+|---|---|
+| `['object', ['id' => 'int']]` | `new Shape(['id' => 'int'])`, s `'id?'` pro pole, které může chybět |
+| `['array', 'string']` | `new ListOf('string')` |
+| `['@pager', Foo::class]` | `new Paged(Foo::class)` |
+| `['object', ['value' => ['@pager', Foo::class]]]` | `new Shape(['value' => new Paged(Foo::class)])` |
+| `'@binary'` | `new Binary` |
+| `#[Response(404, '@error')]` | `#[Response(404)]`, protože kód od 400 dostane schéma chyb |
+| `'list<Foo>'`, `'Foo'` | `new ListOf(Foo::class)`, `Foo::class` |
+| `#[Parameter('x', ...)]` | typ parametru, `@param list<Foo> $x`, nebo `#[Schema]` u něj |
+
+`@return` se pro dokumentaci nečte. Kde popisoval odpověď, přesuňte to do `#[Response]`, v JSON-RPC do `#[Result]`:
 
 ```php
-/** @return array{value: UserResource} */
+#[Response(200, new Shape(['value' => UserResource::class]))]
 public function detail(int $id, #[QueryOf(UserResource::class, single: true)] ?Query $query = null): array
 ```
+
+Bez `#[Response]` dodá `#[QueryOf]` tvar, který vrací `$this->processor->process()`, tedy stránku nebo jeden záznam.
 
 Kontroler, který jen servíroval vygenerovaný soubor, smažte.
 

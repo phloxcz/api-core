@@ -228,17 +228,67 @@ Oba protokoly generují dokument při kompilaci kontejneru ze stejných atribut�
 
 | Zdroj | Výsledek |
 |---|---|
-| nativní typy, `@param`, `@return`, `@var` | schémata, včetně `list<Foo>`, `array<string, int>`, `array{id: int}` a sjednocených typů |
+| nativní typy, `@param`, `@var` | schémata parametrů a polí, včetně `list<Foo>`, `array<string, int>`, `array{id: int}` a sjednocených typů |
+| nativní návratový typ | schéma odpovědi |
+| `#[Response]` v REST, `#[Result]` v JSON-RPC | odpověď, kterou návratový typ neřekne, viz [Popis odpovědi](#popis-odpovědi) |
 | první odstavec docblocku, zbytek | shrnutí, popis |
-| text u `@param` a `@return` | popisy |
+| text u `@param` | popisy |
 | `#[Dto]`, backed enumy | sdílená schémata |
 | omezení | klíčová slova schématu |
 | `#[Authorize]`, `#[AllowAnonymous]` | `x-roles`, popis, chyby `401` a `403` |
 | `@deprecated`, `#[\Deprecated]` | `deprecated` |
-| `#[Throws(1001, 'Order is closed.', httpCode: 409)]` | dokumentované chyby; na třídě platí pro všechny její metody |
+| `#[Throws(409, 'Order is closed.')]`, `#[Throws(OrderError::Closed)]` | dokumentované chyby ve stejném tvaru jako u `ApiException`; na třídě platí pro všechny její metody |
 | `#[Schema([...])]` | klíčová slova JSON Schema přidaná k parametru nebo poli; na třídě `ApiConstructible` schéma jejích hodnot |
 
-Docblock jen zpřesňuje typ, který signatura nechává otevřený, jako `array` nebo `mixed`. Takový, který nejde přečíst, se ignoruje. Třída, která není DTO, se dokumentuje jako obyčejný objekt.
+U parametru nebo pole docblock jen zpřesňuje typ, který signatura nechává otevřený, jako `array` nebo `mixed`. Takový, který nejde přečíst, se ignoruje. Třída, která není DTO, se dokumentuje jako obyčejný objekt.
+
+### Popis odpovědi
+
+Odpověď se popisuje na jednom místě. Je to nativní návratový typ, nebo atribut tam, kde typ říká málo, třeba `array`. `@return` se nečte, takže zůstává pro PHPStan.
+
+```php
+use Phlox\ApiCore\Schema\{ListOf, Paged, Shape};
+
+#[Response(200, new Shape(['value' => new Paged(User::class)]))]
+public function list(?Query $query = null): array
+
+#[Result(new ListOf(User::class), description: 'The users')]   // JSON-RPC
+public function users(): array
+```
+
+| Popis | JSON |
+|---|---|
+| `User::class` | ta třída: DTO, enum, entita nebo resource |
+| `'int'`, `'float'`, `'string'`, `'bool'`, `'mixed'` | skalár; `'?string'` může být null |
+| `new ListOf(User::class)` | `[...]` |
+| `new AnyOf('int', 'string', User::class)` | hodnota kteréhokoli z nich |
+| `new MapOf('int')` | `{"open": 3, "done": 5}` |
+| `new Shape(['id' => 'int', 'note?' => '?string'])` | objekt; pole v něm je vždy, pokud jeho název nekončí `?` |
+| `new Paged(User::class)` | stránka: `{data, total, page, pageSize, from, to}` |
+| `new Binary` | bajty souboru |
+| `new JsonSchema(['type' => 'string', 'format' => 'date'])` | JSON Schema tak, jak je |
+
+Dají se do sebe vnořovat, třeba `new Shape(['ids' => new ListOf('int')])`. Třída se uvádí přes `::class`, takže ji IDE naimportuje, napoví a přejmenuje. Text jako `'User'` nebo `'list<User>'` při kompilaci kontejneru skončí chybou, stejně jako zápis polem ze starších verzí, a chyba řekne, co napsat místo toho.
+
+Otazník znamená dvě různé věci. `'note?' => 'string'` může chybět, kdežto `'note' => '?string'` je vždy, ale může být null.
+
+Stránku skládá `Paged::result($rows, $total, $offset, $pageSize)`. Takhle ji skládá procesor dotazů a takhle ji vrátí i vaše vlastní stránkování, takže stránka a její popis se nemůžou rozejít.
+
+Strukturu, kterou mají všechny odpovědi projektu, třeba obálku, stačí popsat jednou, implementací `SchemaDefinition`:
+
+```php
+final class Value implements SchemaDefinition
+{
+    public function __construct(private SchemaDefinition|string $content) {}
+
+    public function toSchema(SchemaBuilder $builder): array
+    {
+        return (new Shape(['value' => $this->content]))->toSchema($builder);
+    }
+}
+
+#[Response(200, new Value(new Paged(User::class)))]
+```
 
 V konfiguraci stačí nechat jen to, co nejde vyčíst z kódu:
 
@@ -266,13 +316,37 @@ Pokud má dokument vidět jen někdo, nechte `expose` vypnuté a vracejte ho z v
 
 ## Chyby
 
-Chybu pro klienta nahlásíte vyhozením `ApiException`:
+Chybu pro klienta nahlásíte vyhozením `ApiException` s HTTP stavem a zprávou:
 
 ```php
-throw new ApiException(1001, 'Order is closed.', internal: "Order {$id} closed on {$date}", data: ['orderId' => $id]);
+throw new ApiException(404, 'The task was not found.');
+throw new ApiException(409, 'The order is closed.', errorCode: 1001, internal: "Closed on {$date}", data: ['orderId' => $id]);
 ```
 
-Zpráva a data jsou veřejné. Interní zpráva se přidává jen v debug režimu. Jakákoli jiná výjimka se zaloguje a klient dostane obecnou interní chybu.
+Klient dostane `{"error": {"code": ..., "message": ...}}`. `code` je `errorCode`, nebo stav tam, kde stačí, takže `errorCode` slouží jen k rozlišení chyb se stejným stavem. Zpráva a data jsou veřejné, interní zpráva se přidává jen v debug režimu. Jakákoli jiná výjimka se zaloguje a klient dostane obecnou interní chybu.
+
+Stav je první a musí být od `400` do `599`. Cokoli jiného skončí chybou, třeba kód na jeho místě jako ve starších verzích, a hláška řekne, jak to napsat.
+
+Chyby, které aplikace hlásí na více místech, můžou být enum. Ten drží kód, zprávu i stav na jednom místě, pro vyhození i pro dokumentaci:
+
+```php
+enum OrderError: int implements ApiError
+{
+    #[ErrorCase(409, 'The order is closed.')]
+    case Closed = 1001;
+
+    #[ErrorCase(404, 'The order was not found.')]
+    case NotFound = 1002;
+}
+
+throw new ApiException(OrderError::Closed);
+throw new ApiException(OrderError::NotFound, "Order {$id} was not found.");   // vlastní zpráva
+
+#[Throws(OrderError::Closed)]
+public function close(int $id): void { /* ... */ }
+```
+
+Chyby samotného protokolu jsou `ProtocolError` s kódy JSON-RPC 2.0, třeba `ProtocolError::InvalidParams` pro `-32602`. Oba protokoly je hlásí stejně.
 
 ## Kdy se API spouští
 

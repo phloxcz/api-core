@@ -12,76 +12,91 @@ declare(strict_types=1);
 
 namespace Phlox\ApiCore;
 
+use Phlox\ApiCore\Attributes\ErrorCase;
+
 /**
- * Error reported to the API client.
+ * Error reported to the API client:
  *
- * The message is always public. The internal message is only added to the
- * response in debug mode. The HTTP status is used by transports that map errors
- * to HTTP (REST); JSON-RPC ignores it.
+ *     throw new ApiException(404, 'The task was not found.');
+ *     throw new ApiException(409, 'The project is closed.', errorCode: 1001);
+ *     throw new ApiException(OrderError::Closed);     // see ApiError
+ *
+ * Clients get the message and `code`, which is the error code, or the HTTP status
+ * without one. The internal message is added only in debug mode. JSON-RPC has no
+ * HTTP status, and reports only the code.
  */
 class ApiException extends \Exception
 {
-    /** An error occurred on the server while parsing the JSON text. */
-    public const E_PARSE_ERROR = -32700;
-    public const E_PARSE_ERROR_TEXT = 'Parse error.';
-
-    /** The JSON sent is not a valid request. */
-    public const E_INVALID_REQUEST = -32600;
-    public const E_INVALID_REQUEST_TEXT = 'Invalid request.';
-
-    /** The method does not exist / is not available. */
-    public const E_METHOD_NOT_FOUND = -32601;
-    public const E_METHOD_NOT_FOUND_TEXT = 'Method does not exist.';
-
-    /** Invalid method parameter(s). */
-    public const E_INVALID_PARAMS = -32602;
-    public const E_INVALID_PARAMS_TEXT = 'Invalid method parameter(s).';
-
-    /** Internal error. */
-    public const E_INTERNAL_ERROR = -32603;
-    public const E_INTERNAL_ERROR_TEXT = 'Internal server error.';
-
     private const DefaultMessages = [
-        self::E_PARSE_ERROR => self::E_PARSE_ERROR_TEXT,
-        self::E_INVALID_REQUEST => self::E_INVALID_REQUEST_TEXT,
-        self::E_METHOD_NOT_FOUND => self::E_METHOD_NOT_FOUND_TEXT,
-        self::E_INVALID_PARAMS => self::E_INVALID_PARAMS_TEXT,
-        self::E_INTERNAL_ERROR => self::E_INTERNAL_ERROR_TEXT,
-    ];
-
-    private const DefaultHttpCodes = [
-        self::E_PARSE_ERROR => 400,
-        self::E_INVALID_REQUEST => 400,
-        self::E_METHOD_NOT_FOUND => 404,
-        self::E_INVALID_PARAMS => 422,
-        self::E_INTERNAL_ERROR => 500,
-        401 => 401,
-        403 => 403,
+        400 => 'Bad request.',
+        401 => 'Not logged in.',
+        403 => 'Forbidden.',
+        404 => 'Not found.',
+        405 => 'Method not allowed.',
+        409 => 'Conflict.',
+        415 => 'Unsupported media type.',
+        422 => 'Invalid parameters.',
+        500 => 'Internal server error.',
     ];
 
     private readonly int $httpCode;
+    private readonly ?int $errorCode;
 
     /**
-     * @param string|null $message Public message; defaults to the text of a known code
+     * @param int|ApiError $httpCode An HTTP status from 400 to 599, or a case of an ApiError enum which says it all
+     * @param string|null $message Public message; defaults to the one of the case or of the status
+     * @param int|null $errorCode A code of your own, for clients telling errors of one status apart
      * @param string|null $internal Details shown only in debug mode
      * @param array<string, mixed> $data Additional public error data
-     * @param int|null $httpCode Defaults according to a known code, otherwise 500
+     * @throws \InvalidArgumentException For a status that's not an error, such as a code of older versions in its place
      */
     public function __construct(
-        int $code,
+        int|ApiError $httpCode,
         ?string $message = null,
+        ?int $errorCode = null,
         private readonly ?string $internal = null,
         ?\Throwable $previous = null,
         private readonly array $data = [],
-        ?int $httpCode = null,
     ) {
-        parent::__construct($message ?? self::DefaultMessages[$code] ?? 'Error.', $code, $previous);
-        $this->httpCode = $httpCode ?? self::DefaultHttpCodes[$code] ?? 500;
+        if ($httpCode instanceof ApiError) {
+            $case = ErrorCase::of($httpCode);
+            $message ??= $case->message;
+            $errorCode ??= (int) $httpCode->value;
+            $httpCode = $case->httpCode;
+        }
+
+        self::checkHttpCode($httpCode, $message);
+
+        $this->httpCode = $httpCode;
+        $this->errorCode = $errorCode;
+        parent::__construct($message ?? self::DefaultMessages[$httpCode] ?? 'Error.', $errorCode ?? $httpCode, $previous);
+    }
+
+    /**
+     * @throws \InvalidArgumentException
+     */
+    public static function checkHttpCode(int $httpCode, ?string $message = null): void
+    {
+        if ($httpCode < 400 || $httpCode > 599) {
+            $quoted = $message === null ? '' : ', ' . var_export($message, true);
+            throw new \InvalidArgumentException(
+                "{$httpCode} is not the HTTP status of an error. The status comes first, and a code of your own goes to errorCode: "
+                . "new ApiException(409{$quoted}, errorCode: {$httpCode}).",
+            );
+        }
     }
 
     public function getHttpCode(): int
     {
         return $this->httpCode;
+    }
+
+    /**
+     * The code of your own, or of the protocol; null when the HTTP status says it.
+     */
+    public function getErrorCode(): ?int
+    {
+        return $this->errorCode;
     }
 
     public function getInternalMessage(): ?string

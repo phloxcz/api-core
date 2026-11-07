@@ -12,6 +12,8 @@ declare(strict_types=1);
 
 namespace Phlox\ApiCore\Binding;
 
+use Phlox\ApiCore\ProtocolError;
+use Phlox\ApiCore\Attributes\ErrorCase;
 use Phlox\ApiCore\ApiException;
 use Phlox\ApiCore\Attributes\PatchOf;
 use Phlox\ApiCore\Patch;
@@ -195,7 +197,7 @@ final class ParameterBinder
     private static function buildMessage(array $errors): string
     {
         if (count($errors) !== 1) {
-            return ApiException::E_INVALID_PARAMS_TEXT;
+            return ErrorCase::of(ProtocolError::InvalidParams)->message;
         }
 
         $path = array_key_first($errors);

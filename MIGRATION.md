@@ -114,9 +114,11 @@ To check in each controller:
 | `#[Authorize(['a', 'b'])]` | means a **or** b now, where it meant both. For both, write `#[Authorize(['a', 'b'], all: true)]` |
 | A method with `#[Route]` and no `#[HttpGet]` or another verb | doesn't compile. With neither, it isn't an endpoint and gives 404 |
 | A public method inherited from a base controller | is no longer an endpoint; override it |
-| `new ApiException(400, 'x', null, 400)` | the fourth argument is `$previous` now, use `httpCode: 400` |
-| A code you throw without `httpCode:` | gives 500, as before |
-| `#[Consumes('application/pdf')]` | is enforced: another type gets 415, where it used to pass. Check what clients really send |
+| `new ApiException(1001, 'x')` | the HTTP status comes first: `new ApiException(409, 'x', errorCode: 1001)`, or just `new ApiException(404, 'x')`, where the status is the code. A code outside `400`–`599` fails, with the right call in the message. Name `internal:`, as the third argument is `errorCode` |
+| `#[Throws(1001, 'x', httpCode: 409)]` | `#[Throws(409, 'x', errorCode: 1001)]`, in the order of `ApiException` |
+| `ApiException::E_INVALID_PARAMS` and the other constants | `ProtocolError::InvalidParams` and the other cases; the code is `->value` |
+| `Authorizer::E_UNAUTHORIZED`, `Authorizer::E_FORBIDDEN` | `401`, `403` |
+| `#[Consumes('application/pdf')]` | is enforced: another type gets 415, where it used to pass. Check what clients really send. Without `#[FromBody]`, the body stays unread for the method to stream |
 | `$sortList->count()`, `new SortArrayList()` | sorts are a plain array now: `count()`, `[]`. `setSort()`, `$sort->field` and `$sort->dir` stay |
 | `$query->getCriteriaByPath()` returning null | stays so; a missing query reaches your code as an empty `Query` only through a parameter, so `?Query` can still be null in a method you call yourself |
 
@@ -183,12 +185,27 @@ Other differences:
 
 ## 7. Documentation
 
-`#[Response]` and `#[Parameter]` keep working, including `['object', [...]]`, `['@pager', Foo::class]`, `@binary` and `@error`. Both, and the array notation, can go gradually in favour of native types, docblocks and DTOs, which validate as well as document:
+Responses are described by objects of `Phlox\ApiCore\Schema`, see [Describing a response](https://github.com/phloxcz/api-core#describing-a-response). The older notation fails when the container compiles, naming the method and what replaces it:
+
+| Old | New |
+|---|---|
+| `['object', ['id' => 'int']]` | `new Shape(['id' => 'int'])`, with `'id?'` for a field that can be missing |
+| `['array', 'string']` | `new ListOf('string')` |
+| `['@pager', Foo::class]` | `new Paged(Foo::class)` |
+| `['object', ['value' => ['@pager', Foo::class]]]` | `new Shape(['value' => new Paged(Foo::class)])` |
+| `'@binary'` | `new Binary` |
+| `#[Response(404, '@error')]` | `#[Response(404)]`, as a code from 400 gets the schema of errors |
+| `'list<Foo>'`, `'Foo'` | `new ListOf(Foo::class)`, `Foo::class` |
+| `#[Parameter('x', ...)]` | the type of the parameter, `@param list<Foo> $x`, or `#[Schema]` on it |
+
+`@return` isn't read for documentation. Where it described a response, move that to `#[Response]`, or `#[Result]` in JSON-RPC:
 
 ```php
-/** @return array{value: UserResource} */
+#[Response(200, new Shape(['value' => UserResource::class]))]
 public function detail(int $id, #[QueryOf(UserResource::class, single: true)] ?Query $query = null): array
 ```
+
+Without `#[Response]`, `#[QueryOf]` gives the shape that `$this->processor->process()` returns, a page or one record.
 
 Delete a controller which only served a generated file.
 

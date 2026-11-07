@@ -12,7 +12,6 @@ declare(strict_types=1);
 
 namespace Phlox\ApiCore\Documentation;
 
-use Phlox\ApiCore\Attributes\Parameter;
 use Phlox\ApiCore\Attributes\Throws;
 use Phlox\ApiCore\Types\DocComment;
 use Phlox\ApiCore\Types\DtoMeta;
@@ -26,6 +25,8 @@ use Phlox\ApiCore\Types\TypeReader;
  */
 final class MethodReader
 {
+    private const RemovedParameter = 'Phlox\ApiCore\Attributes\Parameter';
+
     public readonly DocComment $doc;
     public readonly bool $deprecated;
 
@@ -46,13 +47,14 @@ final class MethodReader
      */
     public function getParameters(): array
     {
-        $overrides = [];
-        foreach ($this->method->getAttributes(Parameter::class) as $attribute) {
-            $parameter = $attribute->newInstance();
-            if ($parameter->definition !== null) {
-                $overrides[$parameter->name] = ContentDefinition::toSchema($parameter->definition, $this->builder, $this->class);
+        // Without its class, PHP would skip the attribute, and the documentation would change unnoticed
+        foreach ($this->method->getAttributes() as $attribute) {
+            if ($attribute->getName() === self::RemovedParameter) {
+                throw new \InvalidArgumentException('#[Parameter] is gone. Describe a parameter by its type, `@param list<Foo> $name` where the type says too little, or #[Schema] on the parameter.');
             }
         }
+
+        $overrides = [];
 
         $result = [];
         foreach ($this->method->getParameters() as $parameter) {
@@ -92,9 +94,60 @@ final class MethodReader
         return $result;
     }
 
+    /**
+     * The native return type. A docblock isn't read, so a response is described
+     * in one place: by an attribute, where the type says too little.
+     */
     public function getReturnType(): Type
     {
-        return TypeReader::ofReturn($this->method);
+        return TypeReader::native($this->method->getReturnType(), $this->method->getDeclaringClass());
+    }
+
+    /**
+     * `Class::method()`, for messages.
+     */
+    public function getName(): string
+    {
+        return $this->class->getName() . '::' . $this->method->getName() . '()';
+    }
+
+    /**
+     * Attributes of the method, refusing the array notation of older versions
+     * with a message saying what replaces it.
+     *
+     * @template T of object
+     * @param class-string<T> $name
+     * @return list<T>
+     * @throws \InvalidArgumentException
+     */
+    public function getAttributes(string $name): array
+    {
+        $result = [];
+        foreach ($this->method->getAttributes($name) as $attribute) {
+            foreach ($attribute->getArguments() as $argument) {
+                if (is_array($argument)) {
+                    throw new \InvalidArgumentException(self::explainArray($argument));
+                }
+            }
+            $result[] = $attribute->newInstance();
+        }
+
+        return $result;
+    }
+
+    /**
+     * @param array<mixed> $argument
+     */
+    private static function explainArray(array $argument): string
+    {
+        $hint = match (array_is_list($argument) && count($argument) === 2 ? $argument[0] : null) {
+            'object' => "new Shape(['id' => 'int', 'note?' => '?string'])",
+            'array' => 'new ListOf(Foo::class)',
+            '@pager' => 'new Paged(Foo::class)',
+            default => "new JsonSchema([...]) for plain JSON Schema, or new Shape([...]), new ListOf(...) and new Paged(...)",
+        };
+
+        return "The array notation is gone, use {$hint}.";
     }
 
     /**
@@ -126,11 +179,6 @@ final class MethodReader
             static fn(\ReflectionAttribute $attribute): DescribesMethod => $attribute->newInstance(),
             $parameter->getAttributes(DescribesMethod::class, \ReflectionAttribute::IS_INSTANCEOF),
         );
-    }
-
-    public function getReturnDescription(): string
-    {
-        return $this->doc->getReturn()['description'] ?? '';
     }
 
     /**

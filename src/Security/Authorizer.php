@@ -17,9 +17,6 @@ use Phlox\ApiCore\ApiException;
 
 final class Authorizer
 {
-    public const E_UNAUTHORIZED = 401;
-    public const E_FORBIDDEN = 403;
-
     public function __construct(
         private readonly User $user,
     ) {
@@ -37,21 +34,13 @@ final class Authorizer
         }
 
         if (!$this->user->isLoggedIn()) {
-            throw new ApiException(
-                self::E_UNAUTHORIZED,
-                'Unauthorized',
-                'User is not authenticated, but authentication is required.',
-            );
+            throw new ApiException(401, 'Unauthorized', internal: 'User is not authenticated, but authentication is required.');
         }
 
         $userRoles = $this->user->getRoles();
         foreach ($roleGroups as $group) {
             if (array_intersect($group, $userRoles) === []) {
-                throw new ApiException(
-                    self::E_FORBIDDEN,
-                    'Forbidden',
-                    'User needs at least one of the roles: ' . implode(', ', $group) . '.',
-                );
+                throw new ApiException(403, 'Forbidden', internal: 'User needs at least one of the roles: ' . implode(', ', $group) . '.');
             }
         }
     }

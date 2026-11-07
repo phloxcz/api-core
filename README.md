@@ -228,17 +228,67 @@ Both transports generate a document from the same attributes and types they run 
 
 | Source | Becomes |
 |---|---|
-| native types, `@param`, `@return`, `@var` | schemas, including `list<Foo>`, `array<string, int>`, `array{id: int}` and unions |
+| native types, `@param`, `@var` | schemas of parameters and fields, including `list<Foo>`, `array<string, int>`, `array{id: int}` and unions |
+| the native return type | the schema of a response |
+| `#[Response]` in REST, `#[Result]` in JSON-RPC | a response the return type can't tell, see [Describing a response](#describing-a-response) |
 | first paragraph of a docblock, the rest | summary, description |
-| text of `@param` and `@return` | descriptions |
+| text of `@param` | descriptions |
 | `#[Dto]`, backed enums | shared schemas |
 | constraints | keywords of the schema |
 | `#[Authorize]`, `#[AllowAnonymous]` | `x-roles`, the description, errors `401` and `403` |
 | `@deprecated`, `#[\Deprecated]` | `deprecated` |
-| `#[Throws(1001, 'Order is closed.', httpCode: 409)]` | documented errors; on a class, for all of its methods |
+| `#[Throws(409, 'Order is closed.')]`, `#[Throws(OrderError::Closed)]` | documented errors, as `ApiException` takes them; on a class, for all of its methods |
 | `#[Schema([...])]` | JSON Schema keywords added to a parameter or a field; on an `ApiConstructible` class, the schema of its values |
 
-A docblock only refines a type the signature leaves open, such as `array` or `mixed`, and one that can't be read is ignored. A class that isn't a DTO is documented as a plain object.
+For a parameter or a field, a docblock only refines a type the signature leaves open, such as `array` or `mixed`, and one that can't be read is ignored. A class that isn't a DTO is documented as a plain object.
+
+### Describing a response
+
+A response is described in one place. That's the native return type, or an attribute where the type says too little, such as `array`. `@return` isn't read, so it stays for PHPStan.
+
+```php
+use Phlox\ApiCore\Schema\{ListOf, Paged, Shape};
+
+#[Response(200, new Shape(['value' => new Paged(User::class)]))]
+public function list(?Query $query = null): array
+
+#[Result(new ListOf(User::class), description: 'The users')]   // JSON-RPC
+public function users(): array
+```
+
+| Description | JSON |
+|---|---|
+| `User::class` | the class: a DTO, an enum, an entity or a resource |
+| `'int'`, `'float'`, `'string'`, `'bool'`, `'mixed'` | a scalar; `'?string'` can be null |
+| `new ListOf(User::class)` | `[...]` |
+| `new AnyOf('int', 'string', User::class)` | a value of any of these |
+| `new MapOf('int')` | `{"open": 3, "done": 5}` |
+| `new Shape(['id' => 'int', 'note?' => '?string'])` | an object; a field is always there unless its name ends with `?` |
+| `new Paged(User::class)` | a page: `{data, total, page, pageSize, from, to}` |
+| `new Binary` | bytes of a file |
+| `new JsonSchema(['type' => 'string', 'format' => 'date'])` | JSON Schema as it is |
+
+They nest, as in `new Shape(['ids' => new ListOf('int')])`. A class is named by `::class`, so an IDE imports, completes and renames it. Text such as `'User'` or `'list<User>'` fails when the container compiles, and so does the array notation of older versions, with what to write instead.
+
+`?` means two different things. `'note?' => 'string'` can be missing, and `'note' => '?string'` is always there but can be null.
+
+A page is built by `Paged::result($rows, $total, $offset, $pageSize)`. The query processor builds it so, and it's how your own paging returns one, so a page and its description can't differ.
+
+A structure every response of a project has, such as an envelope, can be described once by implementing `SchemaDefinition`:
+
+```php
+final class Value implements SchemaDefinition
+{
+    public function __construct(private SchemaDefinition|string $content) {}
+
+    public function toSchema(SchemaBuilder $builder): array
+    {
+        return (new Shape(['value' => $this->content]))->toSchema($builder);
+    }
+}
+
+#[Response(200, new Value(new Paged(User::class)))]
+```
 
 Keep in the configuration only what can't be read from the code:
 
@@ -266,13 +316,37 @@ To publish a document only to some users, leave `expose` off and return it from 
 
 ## Errors
 
-Throw `ApiException` to report an error to the client:
+Throw `ApiException` with the HTTP status, and a message for the client:
 
 ```php
-throw new ApiException(1001, 'Order is closed.', internal: "Order {$id} closed on {$date}", data: ['orderId' => $id]);
+throw new ApiException(404, 'The task was not found.');
+throw new ApiException(409, 'The order is closed.', errorCode: 1001, internal: "Closed on {$date}", data: ['orderId' => $id]);
 ```
 
-The message and data are public. The internal message is added only in debug mode. Any other exception is logged and reaches the client as a generic internal error.
+The client gets `{"error": {"code": ..., "message": ...}}`. The `code` is `errorCode`, or the status where it's enough, so `errorCode` is only for telling apart errors of one status. The message and data are public, and the internal message is added only in debug mode. Any other exception is logged and reaches the client as a generic internal error.
+
+The status comes first, from `400` to `599`. Anything else fails, such as a code in its place as in older versions, and the message says how to write it.
+
+Errors an application reports in many places can be an enum, which holds the code, the message and the status in one place, for throwing and for documentation alike:
+
+```php
+enum OrderError: int implements ApiError
+{
+    #[ErrorCase(409, 'The order is closed.')]
+    case Closed = 1001;
+
+    #[ErrorCase(404, 'The order was not found.')]
+    case NotFound = 1002;
+}
+
+throw new ApiException(OrderError::Closed);
+throw new ApiException(OrderError::NotFound, "Order {$id} was not found.");   // a message of its own
+
+#[Throws(OrderError::Closed)]
+public function close(int $id): void { /* ... */ }
+```
+
+Errors of the protocol itself are `ProtocolError`, with the codes of JSON-RPC 2.0, such as `ProtocolError::InvalidParams` for `-32602`. Both transports report them so.
 
 ## When the API runs
 

@@ -155,11 +155,11 @@ Assert::null($plain->getDescribedResponse());
 
 Assert::true(DtoMeta::isDto(Marked::class));
 
-// --- A class only another package knows, and a Foo::class which has no leading slash
+// --- A class only another package knows
 
 SchemaBuilder::addClassDescriber(static fn(string $class): ?array => $class === Target::class ? ['title' => 'described'] : null);
 Assert::same(['title' => 'described'], (new SchemaBuilder())->build(new Type(Type::ClassName, class: Target::class)));
-Assert::same(['type' => 'array', 'items' => ['title' => 'described']], Phlox\ApiCore\Documentation\ContentDefinition::toSchema(['array', Target::class], new SchemaBuilder(), new ReflectionClass(Bound::class)));
+Assert::same(['type' => 'array', 'items' => ['title' => 'described']], (new SchemaBuilder())->buildDefinition(new Phlox\ApiCore\Schema\ListOf(Target::class)));
 
 // --- A constructor of a controller can call its parent's
 

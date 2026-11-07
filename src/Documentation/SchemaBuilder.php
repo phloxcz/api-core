@@ -12,10 +12,12 @@ declare(strict_types=1);
 
 namespace Phlox\ApiCore\Documentation;
 
+use Nette\Http\FileUpload;
 use Phlox\ApiCore\ApiConstructible;
 use Phlox\ApiCore\Attributes\Constraints\Constraint;
 use Phlox\ApiCore\Attributes\Dto;
 use Phlox\ApiCore\Attributes\Schema;
+use Phlox\ApiCore\Schema\SchemaDefinition;
 use Phlox\ApiCore\Types\DocComment;
 use Phlox\ApiCore\Types\DtoField;
 use Phlox\ApiCore\Types\DtoMeta;
@@ -82,6 +84,54 @@ final class SchemaBuilder
         return $type->nullable && $type->kind !== Type::Mixed && $type->kind !== Type::Void
             ? self::makeNullable($schema)
             : $schema;
+    }
+
+    /**
+     * Builds a description from #[Response] and the like: an object such as `new ListOf(User::class)`,
+     * a class, or a scalar named `int`, `float`, `string`, `bool` or `mixed`, with `?` for null.
+     *
+     * @return array<string, mixed>|\stdClass
+     * @throws \InvalidArgumentException For a type that isn't one of these
+     */
+    public function buildDefinition(SchemaDefinition|string $definition): array|\stdClass
+    {
+        if ($definition instanceof SchemaDefinition) {
+            return $definition->toSchema($this);
+        }
+
+        $nullable = str_starts_with($definition, '?');
+        $name = $nullable ? substr($definition, 1) : $definition;
+
+        $kind = match ($name) {
+            'int' => Type::Int,
+            'float' => Type::Float,
+            'string' => Type::String,
+            'bool' => Type::Bool,
+            'mixed' => Type::Mixed,
+            default => null,
+        };
+        if ($kind !== null) {
+            return $this->build(new Type($kind, $nullable));
+        }
+
+        $name = ltrim($name, '\\');
+        if ($name !== '' && (class_exists($name) || interface_exists($name) || enum_exists($name))) {
+            return $this->build(new Type(Type::ClassName, $nullable, $name));
+        }
+
+        throw new \InvalidArgumentException(self::explainUnknown($definition));
+    }
+
+    private static function explainUnknown(string $definition): string
+    {
+        $hint = match (true) {
+            $definition === '@binary' => 'Use new Binary.',
+            $definition === '@error' => 'Leave the content out: a response with a code from 400 gets the schema of errors.',
+            (bool) preg_match('~[<{|\[]~', $definition) => 'Types as text are gone; use new ListOf(Foo::class), new MapOf(...), new Shape([...]) or new Paged(Foo::class).',
+            default => 'Name a class by Foo::class, so it is imported and checked, or a scalar by int, float, string, bool or mixed.',
+        };
+
+        return "Unknown type '{$definition}'. {$hint}";
     }
 
     /**
@@ -195,6 +245,10 @@ final class SchemaBuilder
     {
         if (is_a($class, \DateTimeInterface::class, true)) {
             return ['type' => 'string', 'format' => 'date-time'];
+        }
+
+        if (is_a($class, FileUpload::class, true)) {
+            return ['type' => 'string', 'format' => 'binary'];
         }
 
         if (!class_exists($class) && !enum_exists($class)) {

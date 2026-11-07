@@ -13,18 +13,41 @@ declare(strict_types=1);
 namespace Phlox\ApiCore\Attributes;
 
 use Attribute;
+use Phlox\ApiCore\ApiError;
+use Phlox\ApiCore\ApiException;
 
 /**
- * Documents an ApiException a method can end with. On a class, it applies to all
- * of its methods.
+ * Documents an ApiException a method can end with, in the same order:
+ *
+ *     #[Throws(404, 'The task was not found.')]
+ *     #[Throws(409, 'The project is closed.', errorCode: 1001)]
+ *     #[Throws(OrderError::Closed)]
+ *
+ * On a class, it applies to all of its methods.
  */
 #[Attribute(Attribute::TARGET_CLASS | Attribute::TARGET_METHOD | Attribute::IS_REPEATABLE)]
 final class Throws
 {
-    public function __construct(
-        public readonly int $code,
-        public readonly string $message,
-        public readonly int $httpCode = 500,
-    ) {
+    public readonly int $httpCode;
+    public readonly string $message;
+    public readonly ?int $errorCode;
+
+    /**
+     * @throws \InvalidArgumentException For a status that's not an error
+     */
+    public function __construct(int|ApiError $httpCode, ?string $message = null, ?int $errorCode = null)
+    {
+        if ($httpCode instanceof ApiError) {
+            $case = ErrorCase::of($httpCode);
+            $message ??= $case->message;
+            $errorCode ??= (int) $httpCode->value;
+            $httpCode = $case->httpCode;
+        }
+
+        ApiException::checkHttpCode($httpCode, $message);
+
+        $this->httpCode = $httpCode;
+        $this->message = $message ?? (new ApiException($httpCode))->getMessage();
+        $this->errorCode = $errorCode;
     }
 }

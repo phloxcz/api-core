@@ -122,14 +122,14 @@ $parameter = static fn(string $name, int $position = 0): ReflectionParameter => 
 Assert::same('list<Other>', (string) TypeReader::ofParameter($parameter('docOnVague')));
 Assert::same('int', (string) TypeReader::ofParameter($parameter('docOnVague', 1)));
 Assert::same('int', (string) TypeReader::ofParameter($parameter('stale')), 'a stale docblock loses');
-Assert::same('int', (string) TypeReader::ofReturn($method('stale')));
+Assert::same('int', (string) TypeReader::native($method('stale')->getReturnType()));
 Assert::same('?list<Other>', (string) TypeReader::ofParameter($parameter('nullable')), 'the signature decides on null');
 Assert::same('array', (string) TypeReader::ofParameter($parameter('broken')), 'a broken docblock breaks nothing');
 Assert::same('list<Other>', (string) TypeReader::ofParameter($parameter('untyped')));
-Assert::same('?Other', (string) TypeReader::ofReturn($method('untyped')));
+Assert::same('mixed', (string) TypeReader::native($method('untyped')->getReturnType()), 'a return type is never read from a docblock');
 Assert::same(Scope::class, TypeReader::ofParameter($parameter('self'))->class);
-Assert::same(Scope::class, TypeReader::ofReturn($method('self'))->class);
-Assert::same(Type::Void, TypeReader::ofReturn($method('nullable'))->kind);
+Assert::same(Scope::class, TypeReader::native($method('self')->getReturnType(), new ReflectionClass(Scope::class))->class);
+Assert::same(Type::Void, TypeReader::native($method('nullable')->getReturnType())->kind);
 
 $union = TypeReader::ofParameter($parameter('union'));
 Assert::same(Type::Union, $union->kind);

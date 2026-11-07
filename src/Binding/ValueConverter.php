@@ -12,6 +12,7 @@ declare(strict_types=1);
 
 namespace Phlox\ApiCore\Binding;
 
+use Nette\Http\FileUpload;
 use Phlox\ApiCore\ApiConstructible;
 use Phlox\ApiCore\Patch;
 use Phlox\ApiCore\Types\DtoField;
@@ -232,6 +233,12 @@ final class ValueConverter
      */
     private function toClass(string $class, mixed $value, string $path): mixed
     {
+        if ($value instanceof FileUpload && !$value->isOk()) {
+            throw ConversionException::at($path, $value->getError() === UPLOAD_ERR_INI_SIZE || $value->getError() === UPLOAD_ERR_FORM_SIZE
+                ? 'is too large.'
+                : 'could not be uploaded.');
+        }
+
         if (is_object($value) && $value instanceof $class) {
             return $value;
         }
