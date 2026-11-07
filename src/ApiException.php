@@ -43,7 +43,8 @@ class ApiException extends \Exception
     private readonly ?int $errorCode;
 
     /**
-     * @param int|ApiError $httpCode An HTTP status from 400 to 599, or a case of an ApiError enum which says it all
+     * @param int|ApiError|null $httpCode An HTTP status from 400 to 599, or a case of an ApiError enum which says it all;
+     *        left out where it means nothing, as in JSON-RPC: `new ApiException(errorCode: 1001, message: '...')` is 500 in REST
      * @param string|null $message Public message; defaults to the one of the case or of the status
      * @param int|null $errorCode A code of your own, for clients telling errors of one status apart
      * @param string|null $internal Details shown only in debug mode
@@ -51,7 +52,7 @@ class ApiException extends \Exception
      * @throws \InvalidArgumentException For a status that's not an error, such as a code of older versions in its place
      */
     public function __construct(
-        int|ApiError $httpCode,
+        int|ApiError|null $httpCode = null,
         ?string $message = null,
         ?int $errorCode = null,
         private readonly ?string $internal = null,
@@ -65,6 +66,7 @@ class ApiException extends \Exception
             $httpCode = $case->httpCode;
         }
 
+        $httpCode ??= 500;
         self::checkHttpCode($httpCode, $message);
 
         $this->httpCode = $httpCode;

@@ -27,9 +27,7 @@ extensions:
 
 apiQuery:
     maxPageSize: 500
-    entities:                       # viz krok 5
-        App\Entity\Project:
-            relations: [createdBy, drawings]
+    resources: App\ApiV1Module\Resources   # viz krok 5
 
 restApi:
     endpoints:
@@ -72,7 +70,7 @@ restApi:
 |---|---|
 | `AbraD450\ApiServer\ApiController` | `Phlox\ApiCore\ApiController` |
 | `AbraD450\ApiServer\Common\Attributes\{Authorize,AllowAnonymous,NonApi}` | `Phlox\ApiCore\Attributes\*` |
-| `AbraD450\ApiServer\Common\Attributes\Parameter` | `Phlox\ApiCore\Attributes\Parameter` |
+| `AbraD450\ApiServer\Common\Attributes\Parameter` | je pryč: typ parametru, `@param list<Foo> $x` nebo `#[Schema]`, viz krok 7 |
 | `AbraD450\ApiServer\Common\Attributes\FromBody` | `Phlox\RestApi\Attributes\FromBody` |
 | `AbraD450\ApiServer\REST\Attributes\*` | `Phlox\RestApi\Attributes\*` |
 | `AbraD450\ApiServer\RPC\Attributes\Path` | `Phlox\RpcApi\Attributes\Path` |
@@ -96,14 +94,10 @@ use Phlox\ApiQuery\UsesQueryProcessor;
 class BaseController extends ApiController
 {
     use UsesQueryProcessor;
-
-    public function startup(): void
-    {
-        parent::startup();
-        $this->processor->onProcessedEntity[] = [$this, 'onProcessedEntity'];
-    }
 }
 ```
+
+Posluchače procesoru ze `startup()` odcházejí. Řízení přístupu patří do `restrict()` v Resource a dopočítaná pole do jejích metod, viz krok 5. Posluchač, který zůstane, se stane službou s rozhraním `QueryListener`, registrovanou jednou, viz [Události](https://github.com/phloxcz/api-query/blob/master/README.cs.md#události): procesor je sdílený, takže posluchač přidaný ve `startup()` se přidává znovu při každém volání.
 
 Zbytek zůstává: `process($selection, $query)`, `process($entity, $query)`, `skipLimitOffset: true`, `#[FromBody] ?Query $query = null`, `Query::create([...])`, routy, `$this->response`, `$this->terminate()`, `readfile()` a `print` a události se `set`, `unset` a `shouldSkip`.
 
@@ -128,43 +122,65 @@ Stav se může změnit tam, kde dřív byla chyba 500: špatné sloveso dostane 
 
 Entity vygenerujte pomocí `phloxcz/entity-database` z databáze a `entities.neon`. **Každé tajemství tam označte `access: w`:** podle hesla, PINu nebo tokenu maskovaného jen v `onProcessedEntity` se pořád dá filtrovat, takže ho přihlášený klient může uhodnout znak po znaku. Platí to i ve staré knihovně. Maskování pak odstraňte, protože čtení vlastnosti jen pro zápis vyhodí výjimku.
 
-Relace musí být povolené a `apiQuery.entities` to zařídí pro celou aplikaci, takže kontrolery není potřeba měnit:
+Na co dotaz z entity dosáhne, určuje její Resource, třída nalezená v `apiQuery.resources`. Platí pro entitu všude, kam dotaz dosáhne, takže kontrolery není potřeba měnit. Entita bez ní, typicky číselník, ukáže všechny čitelné sloupce a žádné relace a nepotřebuje nic.
 
-```neon
-apiQuery:
-    entities:
-        App\Entity\Project:
-            relations: [createdBy, drawings, subjects, users, entries]
-        App\Entity\Entry:
-            relations: [assignedUser, createdBy, status, type, files]
-            computed:                # co přidává onProcessedEntity přes `set`
-                canManage: bool
-                nodePath: string
+Entita, na kterou se klienti ptají i s relacemi, nebo entita s přístupovými právy či dopočítanými poli, dostane Resource:
+
+```php
+use Nette\Security\User;
+use Phlox\ApiQuery\Attributes\Computed;
+use Phlox\ApiQuery\Attributes\Resource;
+use Phlox\EntityDatabase\Database\Table\Selection;
+
+#[Resource(Entity\Project::class, fields: '*')]
+final readonly class ProjectResource
+{
+    /** @param list<Entity\Drawing> $drawings */
+    public function __construct(
+        public ?Entity\User $createdBy = null,
+        public array $drawings = [],
+    ) {
+    }
+
+    // Co dělalo onSelection, teď i ve filtrech a řazení přes relace
+    public static function restrict(Selection $projects, User $user): void
+    {
+        $projects->where('company_id', $user->getIdentity()->companyId);
+    }
+}
+
+#[Resource(Entity\Entry::class, fields: '*')]
+final readonly class EntryResource
+{
+    public function __construct(
+        public ?Entity\User $assignedUser = null,
+        #[Computed] public ?bool $canManage = null,
+    ) {
+    }
+
+    // Co přidávalo onProcessedEntity přes `set`, teď jen když se vybere
+    public static function canManage(Entity\Entry $entry, User $user): bool
+    {
+        return $entry->assignedUserId === $user->getId();
+    }
+}
 ```
 
-Seznam zjistíte podle toho, co mají klienti v `select`. **Název v `select`, `filter` nebo `sort`, který není známý, teď dostane 400.** Dřív se tiše přeskočil, i ve filtru, který pak vrátil víc řádků, než měl. Klient se zastaralým názvem pole nebo názvem sloupce jako `created_at` tedy viditelně selže a je potřeba ho opravit. Pole z události udělá známým právě `computed`.
+Relace má typ entity, kam vede, která se pak zobrazí jako její vlastní Resource, a když žádnou nemá, se svými sloupci. Služby dostane `restrict()` i dopočítané pole podle typu, za výběrem nebo entitou.
+
+Relace zjistíte podle toho, co mají klienti v `select`. **Název v `select`, `filter` nebo `sort`, který není známý, teď dostane 400.** Dřív se tiše přeskočil, i ve filtru, který pak vrátil víc řádků, než měl. Klient se zastaralým názvem pole nebo názvem sloupce jako `created_at` tedy viditelně selže a je potřeba ho opravit. Pole, které není sloupec, udělá známým právě `#[Computed]`.
 
 Řazení podle něčeho, co není pole, třeba podle výrazu, zůstává na aplikaci: vyjměte ho z dotazu a seřaďte selection sami jako dřív.
 
-Chcete-li ukázat z entity méně, než má, třeba skrýt sloupec, který aplikace sama čte, použijte Resource. Většině entit stačí jeden řádek a `resource:` v konfiguraci zajistí, že platí všude, takže ani tady není potřeba měnit kontrolery:
+Chcete-li ukázat z entity méně, než má, třeba skrýt sloupec, který aplikace sama čte, vyjmenujte pole:
 
 ```php
-#[Resource(Entity\Type::class, fields: '*')]
-final class TypeResource {}
-
 #[Resource(Entity\File::class, fields: ['id', 'name', 'fileName', 'fileSize'])]
 final class FileResource
 {
     /** @param list<VersionResource> $versions */
     public function __construct(public array $versions = []) {}
 }
-```
-
-```neon
-apiQuery:
-    entities:
-        App\Entity\File:
-            resource: App\ApiV1Module\Resources\FileResource
 ```
 
 Podmínka v `entities.neon` je SQL, které Nette cestou obaluje: klíčová slova pište velkými písmeny, například `deleted = FALSE`, protože malé `false` se vezme jako sloupec.
@@ -178,7 +194,7 @@ Další rozdíly:
 - `maxRows` (výchozí 10000) omezuje řádky kolekcí v jedné odpovědi a dotaz, který chce víc, dostane 400. `skipLimitOffset` ho vypíná.
 - `maxDepth` (výchozí 3) omezuje hloubku `select` a cest ve filtrech. Zvyšte ho, pokud klienti jdou hlouběji.
 - Filtr přes kolekci znamená „má záznam odpovídající podmínce" a každý záznam přijde jednou. Záznam bez navázaného řádku neodpovídá `role.name isnull`.
-- Filtr přes relaci neprochází přes `onSelection`, takže omezení, které tam musí platit, uveďte jako `condition:` relace.
+- Omezení z `restrict()` platí i ve filtrech a řazení přes relace, kam `onSelection` nikdy nedosáhlo.
 - `isempty` znamená null nebo prázdný text. `isweek` s číslem znamená daný týden aktuálního roku.
 - Hodnoty se kontrolují: text místo čísla dostane 400, stejně jako `contains` na čemkoli jiném než textu.
 - Vyhledávání hledá každé slovo v jednom sloupci. `ignoreDiacritics: true` nahrazuje staré automatické `unaccent` na PostgreSQL, jehož rozšíření musí být vytvořené předem.

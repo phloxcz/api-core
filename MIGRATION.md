@@ -27,9 +27,7 @@ extensions:
 
 apiQuery:
     maxPageSize: 500
-    entities:                       # see step 5
-        App\Entity\Project:
-            relations: [createdBy, drawings]
+    resources: App\ApiV1Module\Resources   # see step 5
 
 restApi:
     endpoints:
@@ -72,7 +70,7 @@ restApi:
 |---|---|
 | `AbraD450\ApiServer\ApiController` | `Phlox\ApiCore\ApiController` |
 | `AbraD450\ApiServer\Common\Attributes\{Authorize,AllowAnonymous,NonApi}` | `Phlox\ApiCore\Attributes\*` |
-| `AbraD450\ApiServer\Common\Attributes\Parameter` | `Phlox\ApiCore\Attributes\Parameter` |
+| `AbraD450\ApiServer\Common\Attributes\Parameter` | gone: the type of the parameter, `@param list<Foo> $x`, or `#[Schema]`, see step 7 |
 | `AbraD450\ApiServer\Common\Attributes\FromBody` | `Phlox\RestApi\Attributes\FromBody` |
 | `AbraD450\ApiServer\REST\Attributes\*` | `Phlox\RestApi\Attributes\*` |
 | `AbraD450\ApiServer\RPC\Attributes\Path` | `Phlox\RpcApi\Attributes\Path` |
@@ -96,14 +94,10 @@ use Phlox\ApiQuery\UsesQueryProcessor;
 class BaseController extends ApiController
 {
     use UsesQueryProcessor;
-
-    public function startup(): void
-    {
-        parent::startup();
-        $this->processor->onProcessedEntity[] = [$this, 'onProcessedEntity'];
-    }
 }
 ```
+
+Listeners of the processor leave `startup()`. Access control goes to `restrict()` of a resource and computed fields to its methods, see step 5. A listener which stays becomes a service implementing `QueryListener`, registered once, see [Events](https://github.com/phloxcz/api-query#events): the processor is shared, so a listener added in `startup()` is added again on every call.
 
 The rest stays: `process($selection, $query)`, `process($entity, $query)`, `skipLimitOffset: true`, `#[FromBody] ?Query $query = null`, `Query::create([...])`, routes, `$this->response`, `$this->terminate()`, `readfile()` and `print`, and events with `set`, `unset` and `shouldSkip`.
 
@@ -128,43 +122,65 @@ A status can change where errors used to be 500: a wrong verb gets 405 with `All
 
 Generate entities with `phloxcz/entity-database`, from the database and an `entities.neon`. **Mark every secret `access: w` there:** a password, PIN or token masked only by `onProcessedEntity` can still be filtered by, so a logged-in client can guess it character by character. That holds in the old library as well. After that, drop the masking, because reading a write-only property throws.
 
-Relations have to be allowed, and `apiQuery.entities` does it for the whole application, so controllers need no change:
+What a query can reach of an entity is its resource, a class found in `apiQuery.resources`. It stands for the entity wherever a query reaches it, so controllers need no change. An entity without one, typically a code list, shows all its readable columns and no relations, and needs nothing.
 
-```neon
-apiQuery:
-    entities:
-        App\Entity\Project:
-            relations: [createdBy, drawings, subjects, users, entries]
-        App\Entity\Entry:
-            relations: [assignedUser, createdBy, status, type, files]
-            computed:                # what onProcessedEntity adds with `set`
-                canManage: bool
-                nodePath: string
+An entity your clients query with relations, or one with access rights or computed fields, gets a resource:
+
+```php
+use Nette\Security\User;
+use Phlox\ApiQuery\Attributes\Computed;
+use Phlox\ApiQuery\Attributes\Resource;
+use Phlox\EntityDatabase\Database\Table\Selection;
+
+#[Resource(Entity\Project::class, fields: '*')]
+final readonly class ProjectResource
+{
+    /** @param list<Entity\Drawing> $drawings */
+    public function __construct(
+        public ?Entity\User $createdBy = null,
+        public array $drawings = [],
+    ) {
+    }
+
+    // What onSelection did, now also in filters and sorts through relations
+    public static function restrict(Selection $projects, User $user): void
+    {
+        $projects->where('company_id', $user->getIdentity()->companyId);
+    }
+}
+
+#[Resource(Entity\Entry::class, fields: '*')]
+final readonly class EntryResource
+{
+    public function __construct(
+        public ?Entity\User $assignedUser = null,
+        #[Computed] public ?bool $canManage = null,
+    ) {
+    }
+
+    // What onProcessedEntity added with `set`, now only when it's selected
+    public static function canManage(Entity\Entry $entry, User $user): bool
+    {
+        return $entry->assignedUserId === $user->getId();
+    }
+}
 ```
 
-To get the list, look at what clients have in `select`. **A name in `select`, `filter` or `sort` that isn't known now gets 400,** where it used to be skipped silently, also in a filter, which then returned more rows than asked for. So a client with a stale field name or a column name such as `created_at` fails visibly, and has to be fixed. `computed` is what makes a field from an event known.
+A relation is typed by the entity it leads to, which is then shown as its own resource, or with its columns if it has none. Services come to `restrict()` and computed fields by type, after the selection or the entity.
+
+To get the relations, look at what clients have in `select`. **A name in `select`, `filter` or `sort` that isn't known now gets 400,** where it used to be skipped silently, also in a filter, which then returned more rows than asked for. So a client with a stale field name or a column name such as `created_at` fails visibly, and has to be fixed. `#[Computed]` is what makes a field which isn't a column known.
 
 Sorting by something that isn't a field, such as an expression, stays with the application: take it out of the query and order the selection yourself, as before.
 
-To show less of an entity than it has, such as to hide a column the application itself reads, use a resource. Most entities need one line, and `resource:` in the configuration makes it hold everywhere, so controllers need no change here either:
+To show less of an entity than it has, such as to hide a column the application itself reads, name the fields:
 
 ```php
-#[Resource(Entity\Type::class, fields: '*')]
-final class TypeResource {}
-
 #[Resource(Entity\File::class, fields: ['id', 'name', 'fileName', 'fileSize'])]
 final class FileResource
 {
     /** @param list<VersionResource> $versions */
     public function __construct(public array $versions = []) {}
 }
-```
-
-```neon
-apiQuery:
-    entities:
-        App\Entity\File:
-            resource: App\ApiV1Module\Resources\FileResource
 ```
 
 A condition in `entities.neon` is SQL which Nette quotes on its way: write keywords in capitals, as in `deleted = FALSE`, because a lowercase `false` is taken for a column.
@@ -178,7 +194,7 @@ Other differences:
 - `maxRows` (10000 by default) limits rows of collections in one response, and a query wanting more gets 400. `skipLimitOffset` turns it off.
 - `maxDepth` (3 by default) limits how deep `select` and filter paths go. Raise it if clients go deeper.
 - A filter through a collection is "has a record matching this", and a record comes once. A record with no related row doesn't match `role.name isnull`.
-- A filter through a relation doesn't go through `onSelection`, so state a limit which must hold there as `condition:` of the relation.
+- A limit of `restrict()` holds in filters and sorts through relations too, which `onSelection` never reached.
 - `isempty` means null or an empty text. `isweek` with a number means that week of the current year.
 - Values are checked: text for a number gets 400, and so does `contains` on anything but text.
 - Search looks for every word in one column. `ignoreDiacritics: true` replaces the old automatic `unaccent` on PostgreSQL, whose extension has to be created in advance.

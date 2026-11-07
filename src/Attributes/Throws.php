@@ -22,6 +22,7 @@ use Phlox\ApiCore\ApiException;
  *     #[Throws(404, 'The task was not found.')]
  *     #[Throws(409, 'The project is closed.', errorCode: 1001)]
  *     #[Throws(OrderError::Closed)]
+ *     #[Throws(errorCode: 1001, message: 'The order is closed.')]   // JSON-RPC, where a status means nothing
  *
  * On a class, it applies to all of its methods.
  */
@@ -35,8 +36,13 @@ final class Throws
     /**
      * @throws \InvalidArgumentException For a status that's not an error
      */
-    public function __construct(int|ApiError $httpCode, ?string $message = null, ?int $errorCode = null)
+    public function __construct(int|ApiError|null $httpCode = null, ?string $message = null, ?int $errorCode = null)
     {
+        if ($httpCode === null && $errorCode === null) {
+            throw new \InvalidArgumentException('#[Throws] needs an HTTP status, an errorCode, or a case of an ApiError enum.');
+        }
+        $httpCode ??= 500;
+
         if ($httpCode instanceof ApiError) {
             $case = ErrorCase::of($httpCode);
             $message ??= $case->message;

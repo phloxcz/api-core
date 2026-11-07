@@ -333,6 +333,14 @@ $fromEnum = new Throws(TaskError::Locked);
 Assert::same([423, 'The task is locked.', 1003], [$fromEnum->httpCode, $fromEnum->message, $fromEnum->errorCode]);
 Assert::same('Not found.', (new Throws(404))->message);
 
+// Where a status means nothing, as in JSON-RPC, a code alone
+$rpcOnly = new ApiException(errorCode: 1001, message: 'Closed.');
+Assert::same([500, 1001, 'Closed.'], [$rpcOnly->getHttpCode(), $rpcOnly->getCode(), $rpcOnly->getMessage()]);
+$rpcThrows = new Throws(errorCode: 1001, message: 'Closed.');
+Assert::same([500, 'Closed.', 1001], [$rpcThrows->httpCode, $rpcThrows->message, $rpcThrows->errorCode]);
+Assert::exception(static fn() => new Throws(message: 'x'), InvalidArgumentException::class, '#[Throws] needs an HTTP status, an errorCode, or a case of an ApiError enum.');
+Assert::exception(static fn() => new ApiException(1001, 'x'), InvalidArgumentException::class, '1001 is not the HTTP status of an error.%a%'); // the order of older versions still fails
+
 $removed = new MethodReader($class, new ReflectionMethod(Controller::class, 'removed'), $builder);
 Assert::exception(static fn() => $removed->getParameters(), InvalidArgumentException::class, '#[Parameter] is gone. %a%');
 
@@ -462,3 +470,16 @@ Assert::same('{"a":{},"b":[]}', $documents->toJson('api'));
 Assert::same('{"a":{},"b":[]}', json_encode($documents->toObject('api')), 'an empty object survives');
 Assert::same("a: {}\nb: []\n", $documents->toYaml('api'));
 Assert::exception(static fn() => $documents->toJson('other'), InvalidArgumentException::class, "Endpoint 'other' has no document.");
+
+// --- Checking a value against a document, as tests of an API do
+
+$checkedDocument = ['components' => ['schemas' => ['Item' => ['type' => 'object', 'required' => ['id'], 'properties' => ['id' => ['type' => 'integer'], 'tags' => ['type' => 'array', 'items' => ['type' => 'string']]]]]]];
+$item = ['$ref' => '#/components/schemas/Item'];
+Assert::same([], Phlox\ApiCore\Testing\SchemaValidator::validate(['id' => 1, 'tags' => ['a']], $item, $checkedDocument));
+Assert::same(
+    ["\$: 'id' is missing", '$.tags[1]: 2 is not string'],
+    Phlox\ApiCore\Testing\SchemaValidator::validate(['tags' => ['a', 2]], $item, $checkedDocument),
+);
+Assert::same(['$: #/components/schemas/Nothing does not exist'], Phlox\ApiCore\Testing\SchemaValidator::validate(1, ['$ref' => '#/components/schemas/Nothing'], $checkedDocument));
+Assert::same([], Phlox\ApiCore\Testing\SchemaValidator::validate(null, ['anyOf' => [['type' => 'integer'], ['type' => 'null']]], $checkedDocument));
+Assert::same(['$: "x" matches none of anyOf'], Phlox\ApiCore\Testing\SchemaValidator::validate('x', ['anyOf' => [['type' => 'integer'], ['type' => 'null']]], $checkedDocument));

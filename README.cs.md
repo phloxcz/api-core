@@ -346,7 +346,9 @@ throw new ApiException(OrderError::NotFound, "Order {$id} was not found.");   //
 public function close(int $id): void { /* ... */ }
 ```
 
-Chyby samotného protokolu jsou `ProtocolError` s kódy JSON-RPC 2.0, třeba `ProtocolError::InvalidParams` pro `-32602`. Oba protokoly je hlásí stejně.
+Chyby samotného protokolu jsou `ProtocolError` s kódy JSON-RPC 2.0, třeba `ProtocolError::InvalidParams` pro `-32602`. JSON-RPC hlásí tyto kódy, REST místo nich HTTP stav.
+
+Kde stav nic neznamená, třeba v metodě, kterou volá jen JSON-RPC, uveďte samotný kód: `new ApiException(errorCode: 1001, message: 'The order is closed.')` a `#[Throws(errorCode: 1001, message: '...')]`. REST by na takovou chybu odpověděl `500`.
 
 ## Kdy se API spouští
 

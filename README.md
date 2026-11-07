@@ -346,7 +346,9 @@ throw new ApiException(OrderError::NotFound, "Order {$id} was not found.");   //
 public function close(int $id): void { /* ... */ }
 ```
 
-Errors of the protocol itself are `ProtocolError`, with the codes of JSON-RPC 2.0, such as `ProtocolError::InvalidParams` for `-32602`. Both transports report them so.
+Errors of the protocol itself are `ProtocolError`, with the codes of JSON-RPC 2.0, such as `ProtocolError::InvalidParams` for `-32602`. JSON-RPC reports these codes, and REST the HTTP status instead.
+
+Where a status means nothing, as in a method only JSON-RPC calls, name the code alone: `new ApiException(errorCode: 1001, message: 'The order is closed.')`, and `#[Throws(errorCode: 1001, message: '...')]`. REST would answer such an error with `500`.
 
 ## When the API runs
 
